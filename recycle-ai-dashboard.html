@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EcoVision AI – Smart Recycling Sorter</title>
+
+  <!-- Google Fonts: "Orbitron" for the futuristic titles, "Inter" for easy-to-read text -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+
+  <!-- =====================================================================
+       STEP 1: Load the two libraries Teachable Machine needs.
+       TensorFlow.js runs the AI, and tmImage helps load your model + webcam.
+       ===================================================================== -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <style>
+    /* =====================================================================
+       COLORS – change these to restyle the whole website in one place!
+       ===================================================================== */
+    :root {
+      --bg: #070b14;            /* page background (very dark blue) */
+      --panel: #0f1626;         /* background of the two big panels */
+      --panel-border: #1e2a44;  /* thin outline around panels */
+      --text: #e8f0ff;          /* main text color */
+      --muted: #8a9bbd;         /* softer text for labels */
+
+      --neon-cyan: #00f0ff;     /* main accent color */
+      --neon-pink: #ff2bd6;     /* second accent color */
+
+      --recycle: #2f8cff;       /* BLUE  = Recycle */
+      --compost: #2bff88;       /* GREEN = Compost */
+      --trash:   #9aa3b2;       /* GRAY  = Trash   */
+      --unsure:  #ffcc33;       /* YELLOW = AI isn't sure yet */
+    }
+
+    /* Remove default spacing and use our fonts everywhere */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      color: var(--text);
+      min-height: 100vh;
+      /* A subtle glowing grid background for a "sci-fi lab" feel */
+      background:
+        radial-gradient(circle at 15% 10%, rgba(0, 240, 255, 0.12), transparent 40%),
+        radial-gradient(circle at 85% 90%, rgba(255, 43, 214, 0.10), transparent 40%),
+        linear-gradient(rgba(0, 240, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 240, 255, 0.04) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, auto, 40px 40px, 40px 40px, auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---------------- HEADER (top title bar) ---------------- */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 22px 40px;
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    .title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 2rem;
+      letter-spacing: 2px;
+      background: linear-gradient(90deg, var(--neon-cyan), var(--neon-pink));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .subtitle { color: var(--muted); font-size: 1rem; margin-top: 4px; }
+
+    /* The little "SYSTEM ONLINE" light in the corner */
+    .status {
+      display: flex; align-items: center; gap: 10px;
+      font-family: 'Orbitron', sans-serif; font-size: 0.9rem; color: var(--muted);
+    }
+    .status-dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #ff4d4d; box-shadow: 0 0 10px #ff4d4d;
+    }
+    .status-dot.online {
+      background: var(--compost); box-shadow: 0 0 12px var(--compost);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+
+    /* ---------------- MAIN SPLIT SCREEN ---------------- */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;   /* two equal halves: left + right */
+      gap: 28px;
+      padding: 28px 40px 36px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 20px;
+      padding: 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      box-shadow: 0 0 30px rgba(0, 240, 255, 0.06);
+    }
+
+    .panel-label {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 0.95rem;
+      letter-spacing: 3px;
+      color: var(--neon-cyan);
+    }
+
+    /* ---------------- LEFT SIDE: WEBCAM ---------------- */
+    #webcam-box {
+      position: relative;
+      flex: 1;
+      min-height: 380px;
+      border-radius: 16px;
+      overflow: hidden;
+      background: #000;
+      border: 2px solid var(--neon-cyan);
+      box-shadow: 0 0 25px rgba(0, 240, 255, 0.35);
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* The webcam picture (Teachable Machine draws it on a <canvas>) */
+    #webcam-box canvas { width: 100%; height: 100%; object-fit: cover; }
+
+    /* A glowing line that sweeps up and down like a scanner */
+    .scan-line {
+      position: absolute; left: 0; right: 0; height: 3px;
+      background: var(--neon-cyan); box-shadow: 0 0 15px var(--neon-cyan);
+      animation: scan 3s linear infinite; display: none;
+    }
+    .scanning .scan-line { display: block; }
+    @keyframes scan { 0% { top: 0; } 50% { top: calc(100% - 3px); } 100% { top: 0; } }
+
+    /* Message shown before the camera starts */
+    #placeholder { text-align: center; color: var(--muted); font-size: 1.2rem; padding: 20px; }
+    #placeholder .big-icon { font-size: 4rem; margin-bottom: 10px; }
+
+    /* The big START button */
+    #start-btn {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.3rem;
+      padding: 18px;
+      border-radius: 14px;
+      border: 2px solid var(--neon-cyan);
+      background: rgba(0, 240, 255, 0.1);
+      color: var(--neon-cyan);
+      cursor: pointer;
+      letter-spacing: 2px;
+      transition: all 0.2s;
+    }
+    #start-btn:hover { background: var(--neon-cyan); color: var(--bg); box-shadow: 0 0 25px var(--neon-cyan); }
+    #start-btn:disabled { opacity: 0.5; cursor: wait; }
+
+    #error-msg { color: #ff6b6b; font-size: 1rem; display: none; line-height: 1.5; }
+
+    /* ---------------- RIGHT SIDE: RESULTS ---------------- */
+
+    /* Big text that says what the AI sees */
+    #object-name {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 3rem;
+      font-weight: 800;
+      line-height: 1.1;
+      text-shadow: 0 0 20px rgba(0, 240, 255, 0.5);
+      min-height: 3.3rem;
+    }
+
+    /* The color-changing BIN CARD */
+    #bin-card {
+      --card-color: var(--unsure);  /* JavaScript changes this color */
+      display: flex; align-items: center; gap: 22px;
+      padding: 26px 30px;
+      border-radius: 18px;
+      border: 3px solid var(--card-color);
+      background: color-mix(in srgb, var(--card-color) 14%, transparent);
+      box-shadow: 0 0 35px color-mix(in srgb, var(--card-color) 45%, transparent);
+      transition: all 0.4s ease;  /* smooth color change */
+    }
+    #bin-icon { font-size: 4.5rem; transition: transform 0.4s; }
+    #bin-card.pop #bin-icon { transform: scale(1.2) rotate(-8deg); }
+    #bin-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 2.4rem; font-weight: 800;
+      color: var(--card-color);
+      letter-spacing: 2px;
+    }
+    #bin-tip { font-size: 1.15rem; color: var(--text); margin-top: 6px; opacity: 0.9; }
+
+    /* Confidence bars */
+    #bars { display: flex; flex-direction: column; gap: 14px; }
+    .bar-row { display: grid; grid-template-columns: 180px 1fr 70px; align-items: center; gap: 14px; }
+    .bar-name { font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar-track {
+      height: 22px; border-radius: 11px;
+      background: #1a2338; overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%; width: 0%;
+      border-radius: 11px;
+      transition: width 0.25s ease;  /* makes bars slide smoothly */
+    }
+    .bar-percent { font-family: 'Orbitron', sans-serif; font-size: 1.05rem; text-align: right; }
+
+    .empty-note { color: var(--muted); font-size: 1.05rem; }
+
+    footer { text-align: center; color: var(--muted); padding: 0 0 18px; font-size: 0.9rem; }
+
+    /* If the screen is narrow (like a phone), stack the panels */
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; padding: 16px; }
+      header { padding: 16px; }
+      #object-name { font-size: 2.2rem; }
+      .bar-row { grid-template-columns: 110px 1fr 60px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ====================== HEADER ====================== -->
+  <header>
+    <div>
+      <h1 class="title">♻ EcoVision AI</h1>
+      <p class="subtitle">Smart Recycling Sorter · Powered by Machine Learning</p>
+    </div>
+    <div class="status">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">SYSTEM OFFLINE</span>
+    </div>
+  </header>
+
+  <!-- ====================== SPLIT SCREEN ====================== -->
+  <main>
+
+    <!-- LEFT SIDE: the webcam -->
+    <section class="panel">
+      <p class="panel-label">● LIVE CAMERA FEED</p>
+
+      <div id="webcam-box">
+        <div class="scan-line"></div>
+        <div id="placeholder">
+          <div class="big-icon">📷</div>
+          Press <strong>START SCANNER</strong> and hold an item up to the camera!
+        </div>
+      </div>
+
+      <button id="start-btn" onclick="init()">▶ START SCANNER</button>
+      <p id="error-msg"></p>
+    </section>
+
+    <!-- RIGHT SIDE: the AI results -->
+    <section class="panel">
+      <p class="panel-label">● AI SEES</p>
+      <div id="object-name">Waiting…</div>
+
+      <!-- The color-coded bin card -->
+      <div id="bin-card">
+        <div id="bin-icon">🤖</div>
+        <div>
+          <div id="bin-title">READY</div>
+          <div id="bin-tip">Show me something to sort!</div>
+        </div>
+      </div>
+
+      <p class="panel-label">● CONFIDENCE LEVELS</p>
+      <div id="bars">
+        <p class="empty-note">Bars will appear here once the AI is running.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>Science Fair Project · Image classification model trained with Google Teachable Machine</footer>
+
+
+  <script>
+    // =======================================================================
+    // PASTE YOUR TEACHABLE MACHINE URL HERE
+    // -----------------------------------------------------------------------
+    // 1. In Teachable Machine, click "Export Model" → "Upload (shareable link)".
+    // 2. Copy the link it gives you. It looks like:
+    //      https://teachablemachine.withgoogle.com/models/AbCdEfGh/
+    // 3. Paste it between the quotes below. Keep the "/" at the end!
+    // =======================================================================
+    const URL = "PASTE_YOUR_LINK_HERE";
+
+
+    // =======================================================================
+    // SORTING RULES – which bin does each of your classes go in?
+    // -----------------------------------------------------------------------
+    // The words on the LEFT must match your class names in Teachable Machine
+    // EXACTLY (same spelling and capitals). The right side must be
+    // "recycle", "compost", or "trash".
+    // Add or remove lines to match the classes you trained!
+    // =======================================================================
+    const BIN_RULES = {
+      "Plastic Bottle":    "recycle",
+      "Aluminum Can":      "recycle",
+      "Paper Cup":         "recycle",
+      "Food-Soiled Paper": "compost",
+      "Trash":             "trash",
+      "Nothing":           "none"     // a "background / empty" class, if you made one
+    };
+
+    // How sure (0 to 1) the AI must be before it shows an answer.
+    // 0.70 means "at least 70% sure". Below that, it says "Hmm… not sure".
+    const CONFIDENCE_THRESHOLD = 0.70;
+
+
+    // =======================================================================
+    // BIN INFO – the color, emoji and tip shown for each bin
+    // =======================================================================
+    const BINS = {
+      recycle: { title: "RECYCLE", icon: "♻️", color: "var(--recycle)", tip: "Rinse it and toss it in the BLUE bin!" },
+      compost: { title: "COMPOST", icon: "🌱", color: "var(--compost)", tip: "Food-soiled paper goes in the GREEN bin!" },
+      trash:   { title: "TRASH",   icon: "🗑️", color: "var(--trash)",   tip: "This one goes in the GRAY bin." },
+      none:    { title: "SCANNING", icon: "🔍", color: "var(--neon-cyan)", tip: "Hold an item up to the camera." },
+      unsure:  { title: "HMM…",    icon: "🤔", color: "var(--unsure)",  tip: "Not sure yet. Try moving the item closer!" }
+    };
+
+    // Colors for the confidence bars (they match the bins)
+    const BAR_COLORS = {
+      recycle: "#2f8cff", compost: "#2bff88", trash: "#9aa3b2", none: "#00f0ff"
+    };
+
+
+    // These variables are filled in once the AI starts
+    let model, webcam, maxPredictions;
+    let lastBin = "";   // remembers the last bin so the card only "pops" when it changes
+
+
+    // =======================================================================
+    // init() runs when you press the START button.
+    // This is the standard Teachable Machine setup code.
+    // =======================================================================
+    async function init() {
+      const btn = document.getElementById("start-btn");
+      const errorMsg = document.getElementById("error-msg");
+
+      // Friendly reminder if the link hasn't been pasted yet
+      if (URL === "PASTE_YOUR_LINK_HERE") {
+        showError("⚠️ You haven't pasted your Teachable Machine link yet! Look for the comment near the top of the JavaScript.");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "⏳ LOADING AI…";
+      errorMsg.style.display = "none";
+
+      try {
+        // Make sure the link ends with "/" so the file names attach correctly
+        const baseURL = URL.endsWith("/") ? URL : URL + "/";
+        const modelURL = baseURL + "model.json";
+        const metadataURL = baseURL + "metadata.json";
+
+        // Load the AI model and the list of class names
+        model = await tmImage.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
+
+        // Set up the webcam (width, height, flip = true makes it like a mirror)
+        const flip = true;
+        webcam = new tmImage.Webcam(400, 400, flip);
+        await webcam.setup();  // asks permission to use the camera
+        await webcam.play();
+
+        // Put the webcam picture on the page (replacing the placeholder)
+        const box = document.getElementById("webcam-box");
+        document.getElementById("placeholder").remove();
+        box.appendChild(webcam.canvas);
+        box.classList.add("scanning");
+
+        // Build one confidence bar for each class
+        buildBars(model.getClassLabels());
+
+        // Turn the status light green
+        document.getElementById("status-dot").classList.add("online");
+        document.getElementById("status-text").textContent = "SYSTEM ONLINE";
+        btn.textContent = "✅ SCANNER RUNNING";
+
+        // Start the loop that keeps checking the camera
+        window.requestAnimationFrame(loop);
+
+      } catch (err) {
+        console.error(err);
+        btn.disabled = false;
+        btn.textContent = "▶ START SCANNER";
+        showError("❌ Something went wrong: " + err.message +
+          "<br>Check that your model link is correct, and that you allowed the camera.");
+      }
+    }
+
+
+    // =======================================================================
+    // loop() runs over and over (about 60 times a second!)
+    // =======================================================================
+    async function loop() {
+      webcam.update();      // grab the newest camera picture
+      await predict();      // ask the AI what it sees
+      window.requestAnimationFrame(loop);
+    }
+
+
+    // =======================================================================
+    // predict() asks the AI to guess, then updates the screen
+    // =======================================================================
+    async function predict() {
+      // The AI returns a list like: [{className: "Aluminum Can", probability: 0.92}, ...]
+      const predictions = await model.predict(webcam.canvas);
+
+      // Find the guess with the HIGHEST probability
+      let best = predictions[0];
+      for (const p of predictions) {
+        if (p.probability > best.probability) best = p;
+      }
+
+      // Update every confidence bar
+      predictions.forEach((p, i) => {
+        const percent = Math.round(p.probability * 100);
+        document.getElementById("fill-" + i).style.width = percent + "%";
+        document.getElementById("pct-" + i).textContent = percent + "%";
+      });
+
+      // Decide what to show in the big text + card
+      if (best.probability < CONFIDENCE_THRESHOLD) {
+        updateDisplay("Not sure…", "unsure");
+      } else {
+        updateDisplay(best.className, getBin(best.className));
+      }
+    }
+
+
+    // =======================================================================
+    // getBin() figures out which bin a class belongs to
+    // =======================================================================
+    function getBin(className) {
+      // First, check the BIN_RULES list above
+      if (BIN_RULES[className]) return BIN_RULES[className];
+
+      // If it's not in the list, make a smart guess from the words in the name
+      const name = className.toLowerCase();
+      if (name.includes("compost") || name.includes("food") || name.includes("soiled")) return "compost";
+      if (name.includes("bottle") || name.includes("can") || name.includes("cup") ||
+          name.includes("paper") || name.includes("recycl")) return "recycle";
+      if (name.includes("nothing") || name.includes("background") || name.includes("empty")) return "none";
+      return "trash";
+    }
+
+
+    // =======================================================================
+    // updateDisplay() changes the big text and the color card
+    // =======================================================================
+    function updateDisplay(text, binKey) {
+      const bin = BINS[binKey];
+      document.getElementById("object-name").textContent = binKey === "none" ? "Nothing yet" : text;
+
+      // Only change the card when the bin actually changes (so it doesn't flicker)
+      if (binKey !== lastBin) {
+        const card = document.getElementById("bin-card");
+        card.style.setProperty("--card-color", bin.color);
+        document.getElementById("bin-icon").textContent = bin.icon;
+        document.getElementById("bin-title").textContent = bin.title;
+        document.getElementById("bin-tip").textContent = bin.tip;
+
+        // Little "pop" animation
+        card.classList.add("pop");
+        setTimeout(() => card.classList.remove("pop"), 300);
+
+        lastBin = binKey;
+      }
+    }
+
+
+    // =======================================================================
+    // buildBars() creates one bar for each class in your model
+    // =======================================================================
+    function buildBars(labels) {
+      const bars = document.getElementById("bars");
+      bars.innerHTML = "";  // clear the "bars will appear here" message
+
+      labels.forEach((label, i) => {
+        const color = BAR_COLORS[getBin(label)];
+        bars.innerHTML += `
+          <div class="bar-row">
+            <span class="bar-name" title="${label}">${label}</span>
+            <div class="bar-track">
+              <div class="bar-fill" id="fill-${i}"
+                   style="background:${color}; box-shadow:0 0 12px ${color};"></div>
+            </div>
+            <span class="bar-percent" id="pct-${i}">0%</span>
+          </div>`;
+      });
+    }
+
+
+    // Shows a red error message under the START button
+    function showError(message) {
+      const errorMsg = document.getElementById("error-msg");
+      errorMsg.innerHTML = message;
+      errorMsg.style.display = "block";
+    }
+  </script>
+</body>
+</html>
